@@ -3,11 +3,11 @@ import pandas as pd
 from datetime import datetime, timedelta
 import random
 
-# Dependency Check
+# Dependency Check - This will trigger if requirements.txt is missing
 try:
     import plotly.graph_objects as go
 except ModuleNotFoundError:
-    st.error("Missing dependency: Please run 'pip install plotly' in your terminal.")
+    st.error("Missing dependency: Please ensure 'plotly' is in your requirements.txt file.")
     st.stop()
 
 # --- 1. INITIALIZATION ---
@@ -42,7 +42,6 @@ def get_routines():
     return sorted(list(set(DEFAULT_ROUTINES + logged)))
 
 def get_pr_table():
-    """Generates the PR DataFrame comparing All-Time vs Latest."""
     if not st.session_state.workout_logs:
         return pd.DataFrame()
     
@@ -53,15 +52,14 @@ def get_pr_table():
         logs = [w for w in st.session_state.workout_logs if w['Routine'] == r]
         if not logs: continue
         
-        # All-time PR logic
+        # All-time PR
         all_sets = []
         for l in logs:
             for s in l['Sets']:
                 all_sets.append({**s, "date": l['Timestamp']})
-        
         pr_set = max(all_sets, key=lambda x: x['weight'])
         
-        # Latest log logic
+        # Latest log
         latest_log = sorted(logs, key=lambda x: x['Timestamp'])[-1]
         latest_set = max(latest_log['Sets'], key=lambda x: x['weight'])
         
@@ -183,7 +181,6 @@ with tab_workout:
         if st.button("Cancel Edit"):
             st.session_state.edit_buffer = None
             st.rerun()
-        
         init_routine = st.session_state.edit_buffer['Routine']
         init_sets = len(st.session_state.edit_buffer['Sets'])
         init_data = st.session_state.edit_buffer['Sets']
@@ -203,7 +200,6 @@ with tab_workout:
             c1, c2 = st.columns(2)
             val_w = init_data[i]['weight'] if i < len(init_data) else 0.0
             val_r = init_data[i]['reps'] if i < len(init_data) else 0
-            
             wt = c1.number_input(f"Weight (lbs)", step=2.5, key=f"wt_{i}", value=float(val_w))
             rp = c2.number_input(f"Reps", step=1, key=f"rp_{i}", value=int(val_r))
             sets_data.append({"weight": wt, "reps": rp})
@@ -253,7 +249,6 @@ with tab_summaries:
 with tab_logs:
     st.header("Session Management")
     l_sub1, l_sub2 = st.tabs(["💪 Workout History", "⚖️ Weight History"])
-    
     with l_sub1:
         search = st.text_input("Filter logs by routine...").lower()
         for log in reversed(st.session_state.workout_logs):
@@ -268,7 +263,6 @@ with tab_logs:
                     if c_del.button("Delete", key=f"d_{log['UID']}", type="primary"):
                         st.session_state.workout_logs = [w for w in st.session_state.workout_logs if w['UID'] != log['UID']]
                         st.rerun()
-
     with l_sub2:
         if not st.session_state.weight_logs.empty:
             edited_w = st.data_editor(st.session_state.weight_logs, num_rows="dynamic")
