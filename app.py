@@ -1,263 +1,286 @@
 import streamlit as st
-import sqlite3
 import pandas as pd
-import random
 from datetime import datetime, timedelta
+import random
 
-# --- 1. DATABASE CORE ---
-conn = sqlite3.connect('arena_vault.db', check_same_thread=False)
-c = conn.cursor()
+# Dependency Check
+try:
+    import plotly.graph_objects as go
+except ModuleNotFoundError:
+    st.error("Missing dependency: Please run 'pip install plotly' in your terminal.")
+    st.stop()
 
-def create_tables(force_rebuild=False):
-    if force_rebuild:
-        c.execute('DROP TABLE IF EXISTS matches')
-        c.execute('DROP TABLE IF EXISTS players')
-        c.execute('DROP TABLE IF EXISTS games')
-    
-    c.execute('CREATE TABLE IF NOT EXISTS players (name TEXT PRIMARY KEY)')
-    c.execute('CREATE TABLE IF NOT EXISTS games (title TEXT PRIMARY KEY)')
-    c.execute('''CREATE TABLE IF NOT EXISTS matches (
-                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                 game TEXT, date TEXT, time TEXT, 
-                 winners TEXT, losers TEXT, scores TEXT, notes TEXT)''')
-    conn.commit()
+# --- 1. INITIALIZATION ---
+st.set_page_config(page_title="Iron Ledger", layout="wide")
 
-def run_bootstrap():
-    create_tables(force_rebuild=True)
-    demo_players = ["Clay", "Henry", "Thomas", "Monica", "Clarence", "James", 
-                    "Papa", "Tassy", "Wes", "Kat", "Ingrid", "Ansel"]
-    demo_games = ["Catan", "Magic", "Mario Kart", "Monopoly", "Poker", "Go Fish"]
-    for p in demo_players: c.execute("INSERT INTO players VALUES (?)", (p,))
-    for g in demo_games: c.execute("INSERT INTO games VALUES (?)", (g,))
-    for _ in range(50):
-        g = random.choice(demo_games)
-        p_s = random.sample(demo_players, 2)
-        d = (datetime.now() - timedelta(days=random.randint(0, 20))).strftime("%Y-%m-%d")
-        c.execute("INSERT INTO matches (game, date, time, winners, losers) VALUES (?,?,?,?,?)",
-                  (g, d, "12:00", p_s[0], p_s[1]))
-    conn.commit()
+DEFAULT_ROUTINES = ["Bench Press", "Hammer Curl", "Frenchman's Dilemma", "Preacher Curl"]
 
-create_tables()
+if 'user_name' not in st.session_state:
+    st.session_state.user_name = "Clay"
+if 'workout_logs' not in st.session_state:
+    st.session_state.workout_logs = []
+if 'weight_logs' not in st.session_state:
+    st.session_state.weight_logs = pd.DataFrame(columns=["UID", "Timestamp", "User", "Weight", "Location", "Notes"])
+if 'theme_dark' not in st.session_state:
+    st.session_state.theme_dark = False
+if 'edit_buffer' not in st.session_state:
+    st.session_state.edit_buffer = None
 
-# --- 2. THEME & STYLING ---
-if 'theme' not in st.session_state:
-    st.session_state.theme = "dark"
-
-t = {
-    "dark": {"bg": "#0B0E14", "card": "#1C2128", "text": "#FFFFFF", "accent": "#00FFAA", "sub": "#8B949E", "border": "rgba(255,255,255,0.1)"},
-    "light": {"bg": "#F0F2F5", "card": "#FFFFFF", "text": "#1C1E21", "accent": "#007AFF", "sub": "#65676B", "border": "rgba(0,0,0,0.05)"}
-}[st.session_state.theme]
-
-st.set_page_config(page_title="Arena Vault", layout="wide")
-
-st.markdown(f"""
-    <style>
-    .stApp {{ background-color: {t['bg']}; color: {t['text']}; }}
-    
-    /* TAB TEXT COLORS */
-    button[data-baseweb="tab"] p {{
-        color: {t['accent']} !important;
-        font-size: 18px !important;
-        font-weight: 800 !important;
-    }}
-    button[data-baseweb="tab"][aria-selected="true"] p {{
-        color: #FFFFFF !important;
-        text-shadow: 0px 0px 10px {t['accent']};
-    }}
-
-    h1, h2, h3, h4 {{ color: {t['accent']} !important; font-weight: 800 !important; }}
-    .glass-card {{
-        background: {t['card']}; padding: 20px; border-radius: 20px;
-        border: 1px solid {t['border']}; margin-bottom: 15px;
-    }}
-    
-    /* OLD STYLE STREAK PILLS */
-    .streak-pill {{
-        background: rgba(255, 75, 43, 0.1); 
-        border: 1px solid #FF4B2B;
-        padding: 10px 20px; border-radius: 50px;
-        display: inline-block; margin: 5px;
-        font-weight: 800; color: #FF4B2B;
-    }}
-
-    .session-pill {{
-        background: rgba(0, 255, 170, 0.1); border: 1px solid {t['accent']};
-        padding: 5px 15px; border-radius: 50px; display: inline-block; margin: 5px; font-size: 0.85rem;
-    }}
-    .stButton>button {{
-        border-radius: 12px; font-weight: 700; background: {t['accent']}; color: black; border: none; width: 100%;
-    }}
-    .inventory-list {{
-        max-height: 200px; overflow-y: auto; background: rgba(0,0,0,0.2); 
-        border-radius: 10px; padding: 10px; border: 1px solid {t['border']};
-        color: {t['accent']}; font-family: monospace;
-    }}
-    </style>
+# Theme CSS
+if st.session_state.theme_dark:
+    st.markdown("""
+        <style>
+        .stApp { background-color: #0E1117; color: #FAFAFA; }
+        [data-testid="stMetric"] { background-color: #161B22; border: 1px solid #30363D; border-radius: 10px; padding: 15px; }
+        div[data-testid="stExpander"] { background-color: #161B22; border: 1px solid #30363D; }
+        </style>
     """, unsafe_allow_html=True)
 
-# --- 3. ANALYTICS ---
-def get_hot_streaks():
-    df = pd.read_sql_query("SELECT game, winners, date FROM matches ORDER BY date ASC", conn)
-    if df.empty: return []
-    streaks = []
-    for game in df['game'].unique():
-        g_df = df[df['game'] == game]
-        curr_p, count = None, 0
-        for _, row in g_df.iterrows():
-            if row['winners'] == curr_p: count += 1
-            else:
-                if curr_p and count >= 2: streaks.append({"p": curr_p, "g": game, "c": count})
-                curr_p, count = row['winners'], 1
-        if curr_p and count >= 2: streaks.append({"p": curr_p, "g": game, "c": count})
-    return sorted(streaks, key=lambda x: x['c'], reverse=True)[:5]
+# --- 2. CORE FUNCTIONS ---
+def get_routines():
+    logged = list(set([w['Routine'] for w in st.session_state.workout_logs]))
+    return sorted(list(set(DEFAULT_ROUTINES + logged)))
 
-def get_session_stats():
-    all_m = pd.read_sql_query("SELECT * FROM matches ORDER BY id DESC", conn)
-    if all_m.empty: return None, [], {}
-    last_m = all_m.iloc[0]
-    target_game = last_m['game']
-    target_players = set([p.strip() for p in (last_m['winners'] + "," + last_m['losers']).split(",") if p.strip()])
-    session_matches = []
-    for _, row in all_m.iterrows():
-        row_players = set([p.strip() for p in (row['winners'] + "," + row['losers']).split(",") if p.strip()])
-        if row['game'] == target_game and row_players == target_players:
-            session_matches.append(row)
-        else: break
-    stats = {p: 0 for p in target_players}
-    for m in session_matches:
-        for w in m['winners'].split(","):
-            w_strip = w.strip()
-            if w_strip in stats: stats[w_strip] += 1
-    return target_game, sorted(list(target_players)), stats
-
-# --- 4. TABS ---
-tabs = st.tabs(["🏠 HOME", "📝 RECORD", "📋 LOG ARCHIVE", "➕ REGISTER", "⚙️ SETTINGS"])
-
-with tabs[0]: # HOME
-    st.header("Arena Dashboard")
+def get_pr_table():
+    """Generates the PR DataFrame comparing All-Time vs Latest."""
+    if not st.session_state.workout_logs:
+        return pd.DataFrame()
     
-    # OLD STYLE STREAKS (PILLS)
-    streaks = get_hot_streaks()
-    if streaks:
-        st.write("🔥 **CURRENT HOT STREAKS**")
-        streak_html = "".join([f'<div class="streak-pill">{s["p"]}: {s["c"]} Wins ({s["g"]})</div>' for s in streaks])
-        st.markdown(streak_html, unsafe_allow_html=True)
+    routines = get_routines()
+    pr_rows = []
+    
+    for r in routines:
+        logs = [w for w in st.session_state.workout_logs if w['Routine'] == r]
+        if not logs: continue
+        
+        # All-time PR logic
+        all_sets = []
+        for l in logs:
+            for s in l['Sets']:
+                all_sets.append({**s, "date": l['Timestamp']})
+        
+        pr_set = max(all_sets, key=lambda x: x['weight'])
+        
+        # Latest log logic
+        latest_log = sorted(logs, key=lambda x: x['Timestamp'])[-1]
+        latest_set = max(latest_log['Sets'], key=lambda x: x['weight'])
+        
+        pr_rows.append({
+            "Routine": r,
+            "Max Weight": f"{pr_set['weight']} lbs",
+            "Reps @ Max": pr_set['reps'],
+            "Date of Max": pr_set['date'],
+            "Last Max": f"{latest_set['weight']} lbs",
+            "Last Reps": latest_set['reps'],
+            "Date Last Logged": latest_log['Timestamp']
+        })
+    return pd.DataFrame(pr_rows)
+
+def check_for_pb(session):
+    routine = session['Routine']
+    session_date = datetime.strptime(session['Timestamp'], "%Y-%m-%d %H:%M")
+    past_sessions = [
+        w for w in st.session_state.workout_logs 
+        if w['Routine'] == routine and datetime.strptime(w['Timestamp'], "%Y-%m-%d %H:%M") < session_date
+    ]
+    if not past_sessions: return True
+    all_past_weights = [s['weight'] for p in past_sessions for s in p['Sets']]
+    max_past = max(all_past_weights) if all_past_weights else 0
+    current_max = max([s['weight'] for s in session['Sets']])
+    return current_max > max_past
+
+def create_massive_dummy_data():
+    weight_entries = []
+    current_w = 195.0
+    start_date = datetime.now() - timedelta(days=730)
+    for i in range(100):
+        log_dt = start_date + timedelta(days=i * 7.3)
+        current_w += random.uniform(-0.8, 0.6)
+        weight_entries.append({"UID": 1000 + i, "Timestamp": log_dt.strftime("%Y-%m-%d %H:%M"), 
+                               "User": st.session_state.user_name, "Weight": round(current_w, 1), 
+                               "Location": "Home", "Notes": "Historical"})
+    st.session_state.weight_logs = pd.DataFrame(weight_entries)
+
+    new_workouts = []
+    for i in range(1000):
+        log_dt = start_date + timedelta(hours=i * 17.5)
+        if log_dt > datetime.now(): break
+        rt = random.choice(get_routines())
+        progression = (i / 1000) * 85
+        new_workouts.append({
+            "UID": 20000 + i, "Timestamp": log_dt.strftime("%Y-%m-%d %H:%M"),
+            "User": st.session_state.user_name, "Routine": rt,
+            "Sets": [{"reps": random.randint(5, 10), "weight": float(random.randint(95, 150) + progression)} for _ in range(3)]
+        })
+    st.session_state.workout_logs = new_workouts
+    st.success("Generated 1,100 logs!")
+
+# --- 3. UI TABS ---
+tabs = st.tabs(["🏠 Home", "⚖️ Weight", "💪 Log Workout", "📊 Summaries", "📋 Logs", "⚙️ Admin"])
+tab_home, tab_weight, tab_workout, tab_summaries, tab_logs, tab_admin = tabs
+
+# --- HOME ---
+with tab_home:
+    st.title(f"Dashboard: {st.session_state.user_name}")
+    col1, col2 = st.columns(2)
+    with col1:
+        st.subheader("Current Weight")
+        if not st.session_state.weight_logs.empty:
+            st.metric("Latest", f"{st.session_state.weight_logs.iloc[-1]['Weight']} lbs")
+        
         st.divider()
+        st.subheader("📅 7 Days Ago")
+        target_date = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
+        week_ago = [w for w in st.session_state.workout_logs if target_date in w['Timestamp']]
+        if week_ago:
+            s = week_ago[0]
+            st.markdown(f"**{s['Routine']}** {'🏆 **PB!**' if check_for_pb(s) else ''}")
+            for set_item in s['Sets']:
+                st.write(f"- {set_item['weight']} lbs x {set_item['reps']}")
+        else: st.write("No session found 7 days ago.")
 
-    col_l, col_r = st.columns([2, 1])
-    with col_l:
-        st.subheader("Leaderboards")
-        df_stats = pd.read_sql_query("SELECT game, winners, losers FROM matches", conn)
-        if not df_stats.empty:
-            for g in sorted(df_stats['game'].unique()):
-                with st.expander(f"🏆 {g.upper()}"):
-                    players = [r[0] for r in c.execute("SELECT name FROM players").fetchall()]
-                    g_m = df_stats[df_stats['game'] == g]
-                    res = []
-                    for p in players:
-                        w = len(g_m[g_m['winners'].str.contains(p, na=False)])
-                        l = len(g_m[g_m['losers'].str.contains(p, na=False)])
-                        if (w+l) > 0: res.append({"Player": p, "W": w, "L": l, "Win %": f"{(w/(w+l))*100:.0f}%"})
-                    st.dataframe(pd.DataFrame(res).sort_values("W", ascending=False), use_container_width=True, hide_index=True)
-    with col_r:
-        st.subheader("History")
-        recent = pd.read_sql_query("SELECT game, winners, date FROM matches ORDER BY id DESC LIMIT 10", conn)
-        for _, row in recent.iterrows():
-            st.markdown(f'<div class="glass-card"><b>{row["game"]}</b><br><span style="color:{t["accent"]}">Winner: {row["winners"]}</span></div>', unsafe_allow_html=True)
-
-with tabs[1]: # RECORD
-    st.header("Match Control")
-    s_game, s_players, s_stats = get_session_stats()
-    if s_game:
-        st.markdown('<div class="glass-card" style="border: 1px solid #00FFAA44;">', unsafe_allow_html=True)
-        c_q1, c_q2 = st.columns([2, 1])
-        with c_q1: st.subheader(f"⚡ Quick Log: {s_game}")
-        with c_q2: st.markdown(" ".join([f'<div class="session-pill"><b>{k}:</b> {v}</div>' for k,v in s_stats.items()]), unsafe_allow_html=True)
-        q_cols = st.columns(len(s_players))
-        for i, p in enumerate(s_players):
-            if q_cols[i].button(p, key=f"ql_{p}"):
-                new_l = [pl for pl in s_players if pl != p]
-                c.execute("INSERT INTO matches (game, date, time, winners, losers) VALUES (?,?,?,?,?)",
-                          (s_game, datetime.now().strftime("%Y-%m-%d"), "Quick", p, ", ".join(new_l)))
-                conn.commit(); st.rerun()
-        st.markdown('</div>', unsafe_allow_html=True)
-
-    st.markdown('<div class="glass-card">', unsafe_allow_html=True)
-    st.subheader("📝 New Entry")
-    all_p = [r[0] for r in c.execute("SELECT name FROM players ORDER BY name").fetchall()]
-    all_g = [r[0] for r in c.execute("SELECT title FROM games ORDER BY title").fetchall()]
-    c1, c2 = st.columns(2)
-    with c1: rg_game = st.selectbox("Game", all_g)
-    with c2: rg_date = st.date_input("Date", datetime.now())
-    p_in = st.multiselect("Participants", all_p)
-    if p_in:
-        win, loss = [], []
-        for p in p_in:
-            if st.checkbox(f"{p} Won", key=f"m_{p}"): win.append(p)
-            else: loss.append(p)
-        if st.button("LOG MATCH"):
-            if win:
-                c.execute("INSERT INTO matches (game, date, time, winners, losers) VALUES (?,?,?,?,?)",
-                          (rg_game, str(rg_date), "Manual", ", ".join(win), ", ".join(loss)))
-                conn.commit(); st.rerun()
-    st.markdown('</div>', unsafe_allow_html=True)
-
-with tabs[2]: # LOG ARCHIVE
-    st.header("Archive")
-    logs = pd.read_sql_query("SELECT * FROM matches ORDER BY id DESC", conn)
-    edit_id = st.selectbox("Select ID", logs['id'].tolist())
-    if edit_id:
-        row = logs[logs['id'] == edit_id].iloc[0]
-        with st.form("edit"):
-            f_win = st.text_input("Winners", row['winners'])
-            f_loss = st.text_input("Losers", row['losers'])
-            if st.form_submit_button("Save"):
-                c.execute("UPDATE matches SET winners=?, losers=? WHERE id=?", (f_win, f_loss, edit_id))
-                conn.commit(); st.rerun()
-            if st.form_submit_button("🗑️ Delete"):
-                c.execute("DELETE FROM matches WHERE id=?", (edit_id,))
-                conn.commit(); st.rerun()
-    st.dataframe(logs, use_container_width=True, hide_index=True)
-
-with tabs[3]: # REGISTER
-    st.header("Expansion")
-    cur_p = [r[0] for r in c.execute("SELECT name FROM players ORDER BY name").fetchall()]
-    cur_g = [r[0] for r in c.execute("SELECT title FROM games ORDER BY title").fetchall()]
-    c1, col2 = st.columns(2)
-    with c1:
-        st.markdown('<div class="glass-card">', unsafe_allow_html=True)
-        p_in = st.text_input("Player")
-        if p_in and st.button("Add"):
-            c.execute("INSERT INTO players VALUES (?)", (p_in.strip(),)); conn.commit(); st.rerun()
-        st.markdown(f'<div class="inventory-list">{"<br>".join(cur_p)}</div>', unsafe_allow_html=True)
-        st.markdown('</div>', unsafe_allow_html=True)
     with col2:
-        st.markdown('<div class="glass-card">', unsafe_allow_html=True)
-        g_in = st.text_input("Game")
-        if g_in and st.button("Add Game"):
-            c.execute("INSERT INTO games VALUES (?)", (g_in.strip(),)); conn.commit(); st.rerun()
-        st.markdown(f'<div class="inventory-list">{"<br>".join(cur_g)}</div>', unsafe_allow_html=True)
-        st.markdown('</div>', unsafe_allow_html=True)
+        st.subheader("🕒 Last Session Recap")
+        if st.session_state.workout_logs:
+            last = sorted(st.session_state.workout_logs, key=lambda x: x['Timestamp'])[-1]
+            st.markdown(f"### {last['Routine']} {'🏆 **PB!**' if check_for_pb(last) else ''}")
+            for set_item in last['Sets']:
+                st.write(f"- {set_item['weight']} lbs x {set_item['reps']}")
+            vol = sum([s['weight'] * s['reps'] for s in last['Sets']])
+            st.metric("Total Volume", f"{int(vol)} lbs")
+        else: st.warning("No workouts logged.")
 
-with tabs[4]: # SETTINGS
-    st.header("System")
-    st.markdown('<div class="glass-card">', unsafe_allow_html=True)
-    if st.button("🌓 Toggle Theme"):
-        st.session_state.theme = "dark" if st.session_state.theme == "light" else "light"; st.rerun()
     st.divider()
-    
-    # SAFETY GATE RESET
-    if 'show_reset' not in st.session_state: st.session_state.show_reset = False
-    if not st.session_state.show_reset:
-        if st.button("DEBUG: BOOTSTRAP DATA"):
-            st.session_state.show_reset = True
+    st.subheader("🏆 Personal Records & Latest Hits")
+    pr_df = get_pr_table()
+    if not pr_df.empty:
+        st.dataframe(pr_df, hide_index=True, use_container_width=True)
+
+# --- WEIGHT LOGGING ---
+with tab_weight:
+    st.header("Body Weight")
+    with st.form("weight_entry", clear_on_submit=True):
+        cw1, cw2 = st.columns(2)
+        w_in = cw1.number_input("Weight (lbs)", step=0.1)
+        l_in = cw2.text_input("Location", value="Home")
+        if st.form_submit_button("Save Weight"):
+            new_row = pd.DataFrame([{"UID": random.randint(100, 9999), "Timestamp": datetime.now().strftime("%Y-%m-%d %H:%M"), 
+                                     "User": st.session_state.user_name, "Weight": w_in, "Location": l_in}])
+            st.session_state.weight_logs = pd.concat([st.session_state.weight_logs, new_row], ignore_index=True)
             st.rerun()
+
+    if not st.session_state.weight_logs.empty:
+        df_w = st.session_state.weight_logs.copy()
+        df_w['Date'] = pd.to_datetime(df_w['Timestamp']).dt.date
+        fig_w = go.Figure(go.Scatter(x=df_w['Date'], y=df_w['Weight'], mode='lines+markers', name="Weight", line=dict(color='#00f2ff')))
+        fig_w.update_layout(template="plotly_dark" if st.session_state.theme_dark else "plotly_white", height=400)
+        st.plotly_chart(fig_w, use_container_width=True)
+
+# --- WORKOUT LOGGING ---
+with tab_workout:
+    if st.session_state.edit_buffer:
+        st.warning(f"Editing Session ID: {st.session_state.edit_buffer['UID']}")
+        if st.button("Cancel Edit"):
+            st.session_state.edit_buffer = None
+            st.rerun()
+        
+        init_routine = st.session_state.edit_buffer['Routine']
+        init_sets = len(st.session_state.edit_buffer['Sets'])
+        init_data = st.session_state.edit_buffer['Sets']
     else:
-        st.error("⚠️ TOTAL DATA RESET")
-        confirm = st.text_input("Type 'DELETE' to confirm reset:")
-        c1, c2 = st.columns(2)
-        if c1.button("PROCEED"):
-            if confirm == "DELETE": run_bootstrap(); st.session_state.show_reset = False; st.rerun()
-        if c2.button("CANCEL"):
-            st.session_state.show_reset = False; st.rerun()
-    st.markdown('</div>', unsafe_allow_html=True)
+        init_routine = get_routines()[0] if get_routines() else ""
+        init_sets = 3
+        init_data = []
+
+    st.header("Training Entry")
+    r_choice = st.selectbox("Routine", get_routines(), index=get_routines().index(init_routine) if init_routine in get_routines() else 0)
+    n_sets = st.number_input("Number of Sets", min_value=1, max_value=20, value=init_sets)
+    
+    with st.form("workout_form"):
+        sets_data = []
+        for i in range(n_sets):
+            st.markdown(f"**Set {i+1}**")
+            c1, c2 = st.columns(2)
+            val_w = init_data[i]['weight'] if i < len(init_data) else 0.0
+            val_r = init_data[i]['reps'] if i < len(init_data) else 0
+            
+            wt = c1.number_input(f"Weight (lbs)", step=2.5, key=f"wt_{i}", value=float(val_w))
+            rp = c2.number_input(f"Reps", step=1, key=f"rp_{i}", value=int(val_r))
+            sets_data.append({"weight": wt, "reps": rp})
+        
+        if st.form_submit_button("Save Session"):
+            if st.session_state.edit_buffer:
+                for idx, log in enumerate(st.session_state.workout_logs):
+                    if log['UID'] == st.session_state.edit_buffer['UID']:
+                        st.session_state.workout_logs[idx]['Routine'] = r_choice
+                        st.session_state.workout_logs[idx]['Sets'] = sets_data
+                st.session_state.edit_buffer = None
+            else:
+                st.session_state.workout_logs.append({
+                    "UID": random.randint(10000, 99999), 
+                    "Timestamp": datetime.now().strftime("%Y-%m-%d %H:%M"),
+                    "Routine": r_choice, "Sets": sets_data
+                })
+            st.success("Session Stored!")
+            st.rerun()
+
+# --- SUMMARIES TAB ---
+with tab_summaries:
+    st.subheader("🏆 Personal Records & Latest Hits")
+    pr_df_sum = get_pr_table()
+    if not pr_df_sum.empty:
+        st.dataframe(pr_df_sum, hide_index=True, use_container_width=True)
+    
+    st.divider()
+    st.header("Visual Strength Trends")
+    
+    if st.session_state.workout_logs:
+        target = st.selectbox("Select Routine to Plot", get_routines())
+        p_data = [{"Date": pd.to_datetime(w['Timestamp']), "Max": max([s['weight'] for s in w['Sets']])} 
+                  for w in st.session_state.workout_logs if w['Routine'] == target]
+        if p_data:
+            df_p = pd.DataFrame(p_data).sort_values("Date")
+            fig_p = go.Figure()
+            fig_p.add_trace(go.Scatter(x=df_p['Date'], y=df_p['Max'], mode='markers+lines', name="Max Weight", marker=dict(color='#ff4b4b')))
+            if len(df_p) >= 4:
+                df_p = df_p.set_index("Date")
+                df_p['MA'] = df_p['Max'].rolling(window='30D').mean()
+                fig_p.add_trace(go.Scatter(x=df_p.index, y=df_p['MA'], mode='lines', name="30D Moving Avg", line=dict(color='#00f2ff', width=3)))
+            fig_p.update_layout(template="plotly_dark" if st.session_state.theme_dark else "plotly_white", height=500)
+            st.plotly_chart(fig_p, use_container_width=True)
+
+# --- LOGS TAB ---
+with tab_logs:
+    st.header("Session Management")
+    l_sub1, l_sub2 = st.tabs(["💪 Workout History", "⚖️ Weight History"])
+    
+    with l_sub1:
+        search = st.text_input("Filter logs by routine...").lower()
+        for log in reversed(st.session_state.workout_logs):
+            if search in log['Routine'].lower():
+                with st.expander(f"{log['Timestamp']} - {log['Routine']}"):
+                    for s in log['Sets']:
+                        st.write(f"- {s['weight']} lbs x {s['reps']}")
+                    c_edit, c_del = st.columns(2)
+                    if c_edit.button("Edit", key=f"e_{log['UID']}"):
+                        st.session_state.edit_buffer = log
+                        st.rerun()
+                    if c_del.button("Delete", key=f"d_{log['UID']}", type="primary"):
+                        st.session_state.workout_logs = [w for w in st.session_state.workout_logs if w['UID'] != log['UID']]
+                        st.rerun()
+
+    with l_sub2:
+        if not st.session_state.weight_logs.empty:
+            edited_w = st.data_editor(st.session_state.weight_logs, num_rows="dynamic")
+            if st.button("Save Weight Edits"):
+                st.session_state.weight_logs = edited_w
+                st.rerun()
+
+# --- ADMIN TAB ---
+with tab_admin:
+    st.header("System Controls")
+    st.session_state.theme_dark = st.toggle("Dark Mode Aesthetic", value=st.session_state.theme_dark)
+    if st.button("🚀 Populate 1100 Records"): create_massive_dummy_data(); st.rerun()
+    if st.button("🗑️ Reset Database", type="primary"):
+        st.session_state.workout_logs = []; st.session_state.weight_logs = st.session_state.weight_logs.iloc[0:0]
+        st.rerun()
